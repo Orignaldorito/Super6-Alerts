@@ -6,34 +6,30 @@ Why it's built this way
 super6.skysports.com has no public API and is a JS single-page app (a plain
 HTTP GET returns an empty shell — "You need to enable JavaScript to run this
 app."). So this uses a real headless browser (Playwright) to load the page
-the way your phone/laptop would, then reads the kickoff times straight out
-of the rendered DOM.
+the way your phone/laptop would, then reads the deadline straight out of
+the rendered page.
 
-The deadline for a Super6 round is defined (per Sky's own rules) as the
-kick-off time of the earliest of the six fixtures in that round. So:
-
-1. Load https://super6.skysports.com/
-2. Collect every <time datetime="..."> element on the page (fixture lists
-   in SPAs are almost always rendered with HTML5 <time> tags carrying an
-   ISO datetime attribute).
-3. The earliest *future* one of those is the deadline.
+Sky's homepage doesn't show an absolute kickoff time — it shows a live
+countdown like "Round 1 - Deadline In 18H 54M 15S". So this reads that
+countdown and adds it to the current time to get an absolute deadline.
 
 This is a best-effort scrape of a site I don't control, so it's written to
 fail loudly and leave evidence rather than guess silently:
 - Every run writes deadline_debug.txt with the raw times it found and the
   full visible page text, so if it ever picks the wrong thing (or Sky
-  changes their markup) you can see exactly what the scraper saw.
+  changes their wording) you can see exactly what the scraper saw.
 - If it finds nothing, it raises an error instead of pretending.
 
-If Sky changes the site and this stops finding times, open
-deadline_debug.txt, find where the kickoff times actually appear in the
-text dump, and adjust the selector in find_deadline() below.
+If Sky changes the site and this stops finding a deadline, open
+deadline_debug.txt (uploaded as a workflow artifact even on failure) and
+adjust find_deadline() below to match the new wording/layout.
 """
 
 import asyncio
 import json
 import os
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
 
 SUPER6_URL = "https://super6.skysports.com/"
@@ -56,6 +52,9 @@ async def find_deadline():
             "time[datetime]", "els => els.map(e => e.getAttribute('datetime'))"
         )
         body_text = await page.inner_text("body")
+        # Grab "now" right after reading the page, since the countdown fallback
+        # below is relative to this exact moment.
+        scrape_time = datetime.now(timezone.utc)
         await browser.close()
 
     with open(DEBUG_FILE, "w") as f:
@@ -64,25 +63,36 @@ async def find_deadline():
         f.write("\n\nFull visible page text (for manual inspection):\n")
         f.write(body_text)
 
-    now = datetime.now(timezone.utc)
+    # Attempt 1: <time datetime="..."> elements (not used by super6.skysports.com
+    # as of writing, but kept in case Sky changes the page later).
     future = []
     for t in times:
         try:
             dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
-            if dt > now:
+            if dt > scrape_time:
                 future.append(dt)
         except ValueError:
             continue
+    if future:
+        return min(future)
 
-    if not future:
-        raise RuntimeError(
-            "Couldn't find any future kickoff times on the page. "
-            f"Check {DEBUG_FILE} to see what the scraper actually saw — "
-            "the site's markup may have changed, or fixtures may need a "
-            "logged-in session to view."
-        )
+    # Attempt 2: super6.skysports.com actually shows a live countdown like
+    # "Round 1 - Deadline In 18H 54M 15S", with each digit/letter rendered on
+    # its own line. Find the text between "Deadline In" and "Play For Free"
+    # and pull the H/M/S numbers out of it.
+    match = re.search(r"Deadline In(.*?)Play For Free", body_text, re.DOTALL)
+    if match:
+        chunk = "".join(match.group(1).split())  # collapse the one-char-per-line text
+        hms = re.search(r"(\d+)H(\d+)M(\d+)S", chunk)
+        if hms:
+            hours, minutes, seconds = (int(x) for x in hms.groups())
+            return scrape_time + timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
-    return min(future)
+    raise RuntimeError(
+        "Couldn't find a deadline on the page using either method. "
+        f"Check {DEBUG_FILE} to see what the scraper actually saw — "
+        "Sky may have changed the page's wording or layout."
+    )
 
 
 def load_state():
@@ -117,10 +127,18 @@ async def main():
     deadline_iso = deadline.isoformat()
     state = load_state()
 
-    if state["deadline"] != deadline_iso:
-        # new round detected — reset which reminders have fired
+    old_deadline = (
+        datetime.fromisoformat(state["deadline"]) if state["deadline"] else None
+    )
+    # Since the deadline is recomputed from a live countdown each run, it'll
+    # drift by a few seconds run to run even for the same round. Only treat it
+    # as a genuinely new round (and reset reminders) if it moved by more than
+    # 15 minutes.
+    if old_deadline is None or abs((deadline - old_deadline).total_seconds()) > 900:
         state = {"deadline": deadline_iso, "notified": []}
         print(f"New deadline detected: {deadline_iso}")
+    else:
+        state["deadline"] = deadline_iso
 
     now = datetime.now(timezone.utc)
     hours_left = (deadline - now).total_seconds() / 3600
