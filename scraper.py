@@ -37,7 +37,7 @@ STATE_FILE = "state.json"
 DEBUG_FILE = "deadline_debug.txt"
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC")  # set this as a GitHub secret
-REMINDER_HOURS_BEFORE = [24, 2]  # send a push this many hours before deadline
+REMINDER_HOURS_BEFORE = [24, 12, 6, 3, 1]  # send a push at each of these checkpoints
 
 
 async def find_deadline():
