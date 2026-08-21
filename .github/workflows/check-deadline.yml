@@ -28,7 +28,16 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python scraper.py
 
+      - name: Upload debug file
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deadline-debug
+          path: deadline_debug.txt
+          if-no-files-found: ignore
+
       - name: Save state back to the repo
+        if: always()
         run: |
           git config user.name "super6-bot"
           git config user.email "actions@github.com"
