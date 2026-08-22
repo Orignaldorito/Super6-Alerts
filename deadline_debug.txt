@@ -9,7 +9,7 @@ Full visible page text (for manual inspection):
 	
 	
 Login / Register
-Play
+Live Scoring
 Leaderboard
 Results
 Head to Head
@@ -17,17 +17,8 @@ Leagues
 Prizes
 Feedback
 More
-Round 1 - Deadline In
-0
-0
-H
-2
-6
-M
-3
-2
-S
-Play For Free
+Round 1 - In Play
+View Current Round
 Head to Head Challenge
 CANYOUBEAT JAMIE?
 BEAT JAMIE'S POINTS FOR THE CHANCE TO WIN
