@@ -6,23 +6,28 @@ Why it's built this way
 super6.skysports.com has no public API and is a JS single-page app (a plain
 HTTP GET returns an empty shell — "You need to enable JavaScript to run this
 app."). So this uses a real headless browser (Playwright) to load the page
-the way your phone/laptop would, then reads the deadline straight out of
-the rendered page.
+the way your phone/laptop would, then reads the kickoff times straight out
+of the rendered DOM.
 
-Sky's homepage doesn't show an absolute kickoff time — it shows a live
-countdown like "Round 1 - Deadline In 18H 54M 15S". So this reads that
-countdown and adds it to the current time to get an absolute deadline.
+The deadline for a Super6 round is defined (per Sky's own rules) as the
+kick-off time of the earliest of the six fixtures in that round. So:
+
+1. Load https://super6.skysports.com/
+2. Collect every <time datetime="..."> element on the page (fixture lists
+   in SPAs are almost always rendered with HTML5 <time> tags carrying an
+   ISO datetime attribute).
+3. The earliest *future* one of those is the deadline.
 
 This is a best-effort scrape of a site I don't control, so it's written to
 fail loudly and leave evidence rather than guess silently:
 - Every run writes deadline_debug.txt with the raw times it found and the
   full visible page text, so if it ever picks the wrong thing (or Sky
-  changes their wording) you can see exactly what the scraper saw.
+  changes their markup) you can see exactly what the scraper saw.
 - If it finds nothing, it raises an error instead of pretending.
 
-If Sky changes the site and this stops finding a deadline, open
-deadline_debug.txt (uploaded as a workflow artifact even on failure) and
-adjust find_deadline() below to match the new wording/layout.
+If Sky changes the site and this stops finding times, open
+deadline_debug.txt, find where the kickoff times actually appear in the
+text dump, and adjust the selector in find_deadline() below.
 """
 
 import asyncio
@@ -30,11 +35,17 @@ import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from playwright.async_api import async_playwright
 
 SUPER6_URL = "https://super6.skysports.com/"
 STATE_FILE = "state.json"
 DEBUG_FILE = "deadline_debug.txt"
+UK_TZ = ZoneInfo("Europe/London")  # Sky shows times in UK local time (GMT/BST)
+MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC")  # set this as a GitHub secret
 REMINDER_HOURS_BEFORE = [24, 12, 6, 3, 1]  # send a push at each of these checkpoints
@@ -76,7 +87,34 @@ async def find_deadline():
     if future:
         return min(future)
 
-    # Attempt 2: super6.skysports.com actually shows a live countdown like
+    # Attempt 2: when the deadline is more than roughly a day or two away,
+    # Sky shows an absolute date/time instead of a countdown, e.g.
+    # "Round 2 - Deadline 29th Aug @ 2:00pm" (UK local time).
+    abs_match = re.search(
+        r"Deadline\s+(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s*@\s*"
+        r"(\d{1,2}):(\d{2})\s*(am|pm)",
+        body_text,
+        re.IGNORECASE,
+    )
+    if abs_match:
+        day = int(abs_match.group(1))
+        month = MONTHS.get(abs_match.group(2)[:3].lower())
+        hour = int(abs_match.group(3))
+        minute = int(abs_match.group(4))
+        ampm = abs_match.group(5).lower()
+        if month:
+            if ampm == "pm" and hour != 12:
+                hour += 12
+            elif ampm == "am" and hour == 12:
+                hour = 0
+            now_uk = scrape_time.astimezone(UK_TZ)
+            candidate = datetime(now_uk.year, month, day, hour, minute, tzinfo=UK_TZ)
+            # if that date is far in the past, it must mean the year rolled over
+            if candidate < now_uk - timedelta(days=300):
+                candidate = candidate.replace(year=now_uk.year + 1)
+            return candidate.astimezone(timezone.utc)
+
+    # Attempt 3: closer to the deadline, Sky switches to a live countdown like
     # "Round 1 - Deadline In 18H 54M 15S", with each digit/letter rendered on
     # its own line. Find the text between "Deadline In" and "Play For Free"
     # and pull the H/M/S numbers out of it.
@@ -87,6 +125,7 @@ async def find_deadline():
         if hms:
             hours, minutes, seconds = (int(x) for x in hms.groups())
             return scrape_time + timedelta(hours=hours, minutes=minutes, seconds=seconds)
+
 
     raise RuntimeError(
         "Couldn't find a deadline on the page using either method. "
@@ -111,7 +150,7 @@ def send_push(title, message):
     import urllib.request
 
     if not NTFY_TOPIC:
-        print("NTFY_TOPIC not set, skipping push. Message was:", message)
+        print("NTFY_TOPIC not set, skipping ntfy push. Message was:", message)
         return
     req = urllib.request.Request(
         f"https://ntfy.sh/{NTFY_TOPIC}",
@@ -146,12 +185,12 @@ async def main():
     for threshold in REMINDER_HOURS_BEFORE:
         key = str(threshold)
         if hours_left <= threshold and key not in state["notified"]:
-            send_push(
-                "Super 6 reminder",
+            reminder_text = (
                 f"Deadline is in about {threshold}h "
                 f"({deadline.strftime('%a %d %b, %H:%M UTC')}). "
-                "Get your predictions in!",
+                "Get your predictions in!"
             )
+            send_push("Super 6 reminder", reminder_text)
             state["notified"].append(key)
             print(f"Sent {threshold}h reminder")
 
