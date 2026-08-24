@@ -169,18 +169,29 @@ async def main():
     old_deadline = (
         datetime.fromisoformat(state["deadline"]) if state["deadline"] else None
     )
+    now = datetime.now(timezone.utc)
+    hours_left = (deadline - now).total_seconds() / 3600
+
     # Since the deadline is recomputed from a live countdown each run, it'll
     # drift by a few seconds run to run even for the same round. Only treat it
     # as a genuinely new round (and reset reminders) if it moved by more than
     # 15 minutes.
-    if old_deadline is None or abs((deadline - old_deadline).total_seconds()) > 900:
+    is_new_round = old_deadline is None or abs((deadline - old_deadline).total_seconds()) > 900
+    if is_new_round:
         state = {"deadline": deadline_iso, "notified": []}
         print(f"New deadline detected: {deadline_iso}")
+        # Only push a "new round" confirmation if we actually had a previous
+        # deadline on record — skip it on the very first run ever, since
+        # that's just the script starting up, not a new round appearing.
+        if old_deadline is not None:
+            send_push(
+                "New Super 6 deadline",
+                f"New round detected. Deadline is "
+                f"{deadline.strftime('%a %d %b, %H:%M UTC')} "
+                f"(about {hours_left:.1f}h from now).",
+            )
     else:
         state["deadline"] = deadline_iso
-
-    now = datetime.now(timezone.utc)
-    hours_left = (deadline - now).total_seconds() / 3600
 
     for threshold in REMINDER_HOURS_BEFORE:
         key = str(threshold)
