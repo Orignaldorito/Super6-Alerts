@@ -9,7 +9,7 @@ Full visible page text (for manual inspection):
 	
 	
 Login / Register
-Play
+Live Scoring
 Leaderboard
 Results
 Head to Head
@@ -17,21 +17,8 @@ Leagues
 Prizes
 Feedback
 More
-i
-MIDWEEK MILLIONS - ONE FINAL TIME!
-The £1M MUST GO on Sun 29th Nov, but first up is another bumper midweek round! Arsenal vs Dortmund is the big one, but there are five more Champions League fixtures to predict for your chance to become a millionaire!
-See T&C’s
-Round 18 - Deadline In
-0
-1
-H
-1
-7
-M
-3
-3
-S
-Play For Free
+Round 18 - In Play
+View Current Round
 Head to Head Challenge
 CANYOUBEAT JAMIE?
 BEAT JAMIE'S POINTS FOR THE CHANCE TO WIN
